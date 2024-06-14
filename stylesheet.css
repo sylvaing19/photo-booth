@@ -1,0 +1,38 @@
+QFrame {
+    /*border: 1px solid red;*/
+}
+
+QLabel {
+    color: white;
+}
+
+QLabel:disabled {
+    color: rgba(0, 0, 0, 0);
+}
+
+QFrame#MainWidget {
+    background-color: #2F4858;
+}
+
+QFrame#CentralWidget {
+    background-color: #276579;
+    border-radius: 3px;
+}
+
+QPushButton {
+    background-color: #276579;
+    border: none;
+    border-radius: 100px;
+    height: 200px;
+    width: 200px;
+    max-width: 200px;
+    max-height: 200px;
+}
+
+QPushButton:pressed {
+    background-color: #3385A0;
+}
+
+QPushButton:disabled {
+    background-color: #9b9b9b;
+}
