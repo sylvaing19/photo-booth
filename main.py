@@ -4,22 +4,15 @@ import cv2
 from PyQt5.QtWidgets import (QMainWindow, QApplication, QWidget, QHBoxLayout,
                              QPushButton, QVBoxLayout, QFrame,
                              QGraphicsDropShadowEffect, QLabel, QGridLayout)
-from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer, QProcess
+from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer, QProcess, QThread
 from PyQt5.QtGui import QImage, QPixmap, QIcon
-from os.path import join, dirname
-
-
-# Index of the camera in OpenCV, '0' is usually the integrated webcam
-WEBCAM_ID = 1
-
-# Duration of the countdown before taking a picture (in seconds)
-COUNTDOWN_DURATION = 10
-
-# Duration showing the picture taken before coming back to the welcome screen
-INACTIVITY_TIMEOUT = 60000
-
-# Duration showing the error message in case of failure
-ERROR_MSG_TIMEOUT = 15000
+from os.path import join, dirname, splitext
+from random import randrange
+from PIL import Image
+from config import (WEBCAM_ID, COUNTDOWN_DURATION, INACTIVITY_TIMEOUT,
+                    ERROR_MSG_TIMEOUT, CAMERA_MAX_RETRY, CAMERA_PICTURE_SIZE,
+                    CAMERA_OUT_FILENAME, PREVIEW_SIZE, FRAME_DIRECTORY,
+                    FRAMED_PICTURE_SIZE, FRAME_IMAGE_POS, FRAME_OUT_FILENAME)
 
 # How to disable edge-of-touchscreen gestures:
 # https://sps-support.honeywell.com/s/article/How-to-disable-touchscreen-edge-swipes-in-Windows-10
@@ -50,7 +43,7 @@ class CentralWidget(QFrame):
     def __init__(self, parent):
         super().__init__(parent)
         self.setObjectName("CentralWidget")
-        self._size = QSize(960, 720)
+        self._size = QSize(*PREVIEW_SIZE)
         apply_shadow(self, 100)
         self._img = QLabel(self)
         self._img.setAlignment(Qt.AlignCenter)
@@ -128,12 +121,59 @@ class Cheese(CentralWidget):
 
 
 class Preview(CentralWidget):
+    preview_ready = pyqtSignal()
+
     def __init__(self, parent):
         super().__init__(parent)
+        self._bg_thread = QThread(self)
+        self._bg_thread.run = self._make_montage
+        self._bg_thread.finished.connect(self._on_montage_done)
+        self._icon = QIcon(join("assets", "wait.svg"))
+        self._pixmap = QPixmap()
+        self._current_frame = 0
+        self._frames = []
 
-    def preview(self):
-        self._img.setPixmap(QPixmap("latest.jpg").scaled(
-            self._size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+    def _new_frame(self):
+        self._frames = [join(FRAME_DIRECTORY, f)
+                        for f in next(os.walk(FRAME_DIRECTORY))[2]
+                        if splitext(f)[1].lower() == ".png"]
+        self._current_frame = randrange(len(self._frames))
+
+    def _next_frame(self):
+        self._current_frame += 1
+        if self._current_frame >= len(self._frames):
+            self._current_frame = 0
+
+    def compute(self, randomized):
+        if randomized:
+            self._new_frame()
+        else:
+            self._next_frame()
+        self._img.setPixmap(self._icon.pixmap(self._img.size() / 2))
+        self._bg_thread.start()
+
+    def _make_montage(self):
+        frame = Image.open(self._frames[self._current_frame])
+        picture = Image.open(CAMERA_OUT_FILENAME)
+        if frame.size != FRAMED_PICTURE_SIZE:
+            print("Warning: frame has unexpected resolution")
+        if picture.size != CAMERA_PICTURE_SIZE:
+            print("Warning: picture from camera has unexpected resolution")
+        output = Image.new('RGBA', frame.size)
+        output.paste(picture, FRAME_IMAGE_POS)
+        output.paste(frame, (0, 0), frame)
+        output.save(FRAME_OUT_FILENAME)
+        pixmap = QPixmap(FRAME_OUT_FILENAME)
+        cropped_w = round(pixmap.height() *
+                          self._size.width() / self._size.height())
+        pixmap = pixmap.copy((pixmap.width() - cropped_w) // 2, 0,
+                             cropped_w, pixmap.height())
+        self._pixmap = pixmap.scaled(
+            self._size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+    def _on_montage_done(self):
+        self._img.setPixmap(self._pixmap)
+        self.preview_ready.emit()
 
 
 class AbstractButton(QFrame):
@@ -176,6 +216,13 @@ class PrinterWidget(AbstractButton):
         self._label.setText("Imprimer la photo")
 
 
+class ChangeQuoteWidget(AbstractButton):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._button.setIcon(QIcon(join("assets", "quote.svg")))
+        self._label.setText("Changer de citation")
+
+
 class BottomLabel(QFrame):
     def __init__(self, parent):
         super().__init__(parent)
@@ -204,13 +251,21 @@ class BottomLabel(QFrame):
         self._title.setText("Magnifique ! On imprime ?")
         self._subtitle.setText("")
 
-    def set_printing(self):
-        self._title.setText("Impression en cours...")
+    def set_pre_printing(self):
+        self._title.setText("Démarrage de l'impression...")
         self._subtitle.setText("")
 
-    def set_error(self):
+    def set_printing(self):
+        self._title.setText("Impression en cours")
+        self._subtitle.setText("La photo sera prête dans 45 secondes")
+
+    def set_photo_error(self):
         self._title.setText("Echec de prise de vue")
         self._subtitle.setText("Si le problème persiste, appelez Sylvain")
+
+    def set_printer_error(self):
+        self._title.setText("Echec d'impression")
+        self._subtitle.setText("La photo est quand même sauvegardée")
 
 
 class Countdown(QFrame):
@@ -252,6 +307,7 @@ class MainWidget(QFrame):
         self._img = WebcamWidget(self)
         self._btn_photo = PhotoWidget(self)
         self._btn_printer = PrinterWidget(self)
+        self._btn_quote = ChangeQuoteWidget(self)
         self._label = BottomLabel(self)
         self._countdown = Countdown(self)
         self._cheese = Cheese(self)
@@ -266,12 +322,19 @@ class MainWidget(QFrame):
         # Process
         self._camera_task = QProcess(self)
         self._camera_task.finished.connect(self._on_picture_taken)
+        self._printer_task = QProcess(self)
+        self._printer_task.finished.connect(self._on_print_sent)
 
         # Signals
         self._btn_photo.clicked.connect(self._on_photo_clicked)
         self._btn_printer.clicked.connect(self._on_printer_clicked)
+        self._btn_quote.clicked.connect(self._on_make_preview)
         self._countdown.last_second.connect(self._on_cheese)
         self._cheese.take_picture.connect(self._on_take_picture)
+        self._preview.preview_ready.connect(self._on_preview_ready)
+
+        # Variables
+        self._camera_retry_count = 0
 
         # Init
         self._on_reset()
@@ -280,7 +343,10 @@ class MainWidget(QFrame):
         grid = QGridLayout()
         grid.addWidget(self._img, 0, 1)
         grid.addWidget(self._btn_photo, 0, 2)
-        grid.addWidget(self._btn_printer, 0, 0)
+        v_grid = QVBoxLayout()
+        v_grid.addWidget(self._btn_printer)
+        v_grid.addWidget(self._btn_quote)
+        grid.addLayout(v_grid, 0, 0)
         grid.addWidget(self._label, 1, 0, 1, 3)
         grid.addWidget(self._countdown, 1, 1)
         grid.addWidget(self._cheese, 0, 1)
@@ -292,10 +358,8 @@ class MainWidget(QFrame):
 
     def _on_reset(self):
         self._img.show()
-        self._btn_photo.show()
-        self._btn_photo.setEnabled(True)
-        self._btn_printer.show()
-        self._btn_printer.setEnabled(False)
+        self._show_buttons(True)
+        self._enable_buttons(photo_only=True)
         self._label.show()
         self._label.set_welcome()
         self._countdown.hide()
@@ -305,10 +369,7 @@ class MainWidget(QFrame):
     def _on_photo_clicked(self):
         self._inactivity.stop()
         self._img.show()
-        self._btn_photo.show()
-        self._btn_photo.setEnabled(False)
-        self._btn_printer.show()
-        self._btn_printer.setEnabled(False)
+        self._enable_buttons(False)
         self._label.hide()
         self._countdown.show()
         self._countdown.start(COUNTDOWN_DURATION)
@@ -317,53 +378,83 @@ class MainWidget(QFrame):
 
     def _on_cheese(self):
         self._img.hide()
-        self._btn_photo.hide()
-        self._btn_printer.hide()
+        self._show_buttons(False)
         self._countdown.hide()
         self._cheese.show()
         self._cheese.start()
 
-    def _on_take_picture(self):
+    def _on_take_picture(self, retry=False):
+        if not retry:
+            self._camera_retry_count = 0
         self._camera_task.start(sys.executable, ["camera.py"])
 
     def _on_picture_taken(self, ret_code: int):
         if ret_code == 0:
-            self._on_picture_taken_success()
+            self._on_make_preview(new_picture=True)
         else:
             print(str(self._camera_task.readAllStandardError(), 'utf-8'))
-            self._on_picture_taken_error()
+            self._camera_retry_count += 1
+            if self._camera_retry_count < CAMERA_MAX_RETRY:
+                self._on_take_picture(retry=True)
+            else:
+                self._on_error(photo_error=True)
 
-    def _on_picture_taken_success(self):
-        self._btn_photo.show()
-        self._btn_photo.setEnabled(True)
-        self._btn_printer.show()
-        self._btn_printer.setEnabled(True)
+    def _on_error(self, photo_error):
+        self._show_buttons(True)
+        self._enable_buttons(photo_only=True)
         self._label.show()
-        self._label.set_review_picture()
-        self._cheese.hide()
-        self._preview.show()
-        self._preview.preview()
-        self._inactivity.start(INACTIVITY_TIMEOUT)
-
-    def _on_picture_taken_error(self):
-        self._btn_photo.show()
-        self._btn_photo.setEnabled(True)
-        self._btn_printer.show()
-        self._btn_printer.setEnabled(False)
-        self._label.show()
-        self._label.set_error()
+        if photo_error:
+            self._label.set_photo_error()
+        else:
+            self._label.set_printer_error()
         self._cheese.show()
         self._cheese.error()
-        self._preview.hide()
         self._inactivity.start(ERROR_MSG_TIMEOUT)
+
+    def _on_make_preview(self, new_picture=False):
+        self._inactivity.stop()
+        self._show_buttons(True)
+        self._enable_buttons(False)
+        self._label.hide()
+        self._cheese.hide()
+        self._preview.show()
+        self._preview.compute(randomized=new_picture)
+
+    def _on_preview_ready(self):
+        self._enable_buttons(True)
+        self._label.show()
+        self._label.set_review_picture()
+        self._inactivity.start(INACTIVITY_TIMEOUT)
 
     def _on_printer_clicked(self):
         self._inactivity.stop()
-        self._btn_photo.setEnabled(False)
-        self._btn_printer.setEnabled(False)
-        self._label.set_printing()
-        print("PRINTING")
-        QTimer.singleShot(5000, self._on_reset)  # todo
+        self._enable_buttons(False)
+        self._label.set_pre_printing()
+        self._printer_task.start(sys.executable, ["printer.py"])
+
+    def _on_print_sent(self, ret_code: int):
+        if ret_code == 0:
+            self._label.set_printing()
+            self._enable_buttons(photo_only=True)
+            self._inactivity.start(7000)
+        else:
+            print(str(self._printer_task.readAllStandardError(), 'utf-8'))
+            self._on_error(photo_error=False)
+
+    def _show_buttons(self, show):
+        self._btn_photo.setVisible(show)
+        self._btn_printer.setVisible(show)
+        self._btn_quote.setVisible(show)
+
+    def _enable_buttons(self, enable=False, photo_only=False):
+        if photo_only:
+            self._btn_photo.setEnabled(True)
+            self._btn_printer.setEnabled(False)
+            self._btn_quote.setEnabled(False)
+        else:
+            self._btn_photo.setEnabled(enable)
+            self._btn_printer.setEnabled(enable)
+            self._btn_quote.setEnabled(enable)
 
 
 class MainWindow(QMainWindow):
@@ -371,7 +462,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         w = MainWidget(self)
         self.setCentralWidget(w)
-        self.setCursor(Qt.BlankCursor)
+        # self.setCursor(Qt.BlankCursor)
 
 
 def except_hook(t, value, traceback):

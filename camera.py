@@ -5,11 +5,8 @@ import shutil
 import sys
 import os
 from os.path import join
-
-TARGET_MANUFACTURER = "Nikon Corporation"
-TARGET_DEVICE_NAME = "D70s"
-OUTPUT_FILENAME = "latest.jpg"
-OUTPUT_DIRNAME = "pictures"
+from config import (CAMERA_MANUFACTURER, CAMERA_DEVICE_NAME,
+                    CAMERA_OUT_FILENAME, CAMERA_OUT_DIRNAME)
 
 
 def to_hex(val, nbits):
@@ -26,8 +23,8 @@ def find_device(manager):
         p_manufacturer = str(device_info.Properties["Manufacturer"])
         p_name = str(device_info.Properties["Name"])
         print("  - " + p_manufacturer + " (" + p_name + ")")
-        if (p_manufacturer == TARGET_MANUFACTURER and
-                p_name == TARGET_DEVICE_NAME):
+        if (p_manufacturer == CAMERA_MANUFACTURER and
+                p_name == CAMERA_DEVICE_NAME):
             print("Target found")
             return device_info
     raise RuntimeError("Target device not found")
@@ -56,13 +53,13 @@ def wait_for_picture(device, picture_count: int):
 
 def get_picture(device):
     try:
-        os.remove(OUTPUT_FILENAME)
+        os.remove(CAMERA_OUT_FILENAME)
         d = device.Connect()
         last_pic = d.Items(d.Items.count)
         name = str(last_pic.Properties["Item Name"].Value) + ".jpg"
         wia_img = last_pic.Transfer()
-        wia_img.SaveFile(OUTPUT_FILENAME)
-        shutil.copy(OUTPUT_FILENAME, join(OUTPUT_DIRNAME, name))
+        wia_img.SaveFile(CAMERA_OUT_FILENAME)
+        shutil.copy(CAMERA_OUT_FILENAME, join(CAMERA_OUT_DIRNAME, name))
     except pywintypes.com_error as e:
         raise RuntimeError("[get_picture] WIA error: " + wia_err_to_str(e))
     except Exception as e:

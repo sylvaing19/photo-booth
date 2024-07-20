@@ -1,0 +1,4 @@
+PyQt5==5.15.10
+opencv-python==4.10.0.82
+pywin32==306
+pillow==10.4.0
