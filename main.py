@@ -247,6 +247,10 @@ class BottomLabel(QFrame):
         self._subtitle.setText(
             "Appuyez sur le bouton, prenez la pose, souriez...")
 
+    def set_look_up(self):
+        self._title.setText("Regardez l'objectif")
+        self._subtitle.setText("")
+
     def set_review_picture(self):
         self._title.setText("Magnifique ! On imprime ?")
         self._subtitle.setText("")
@@ -380,6 +384,8 @@ class MainWidget(QFrame):
         self._img.hide()
         self._show_buttons(False)
         self._countdown.hide()
+        self._label.show()
+        self._label.set_look_up()
         self._cheese.show()
         self._cheese.start()
 
@@ -462,7 +468,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         w = MainWidget(self)
         self.setCentralWidget(w)
-        # self.setCursor(Qt.BlankCursor)
+        self.setCursor(Qt.BlankCursor)
 
 
 def except_hook(t, value, traceback):

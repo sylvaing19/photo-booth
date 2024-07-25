@@ -4,7 +4,7 @@
 WEBCAM_ID = 1
 
 # Duration of the countdown before taking a picture (in seconds)
-COUNTDOWN_DURATION = 10
+COUNTDOWN_DURATION = 7
 
 # Duration showing the picture taken before coming back to the welcome screen
 INACTIVITY_TIMEOUT = 60000
